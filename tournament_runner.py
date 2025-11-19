@@ -4,6 +4,7 @@ Orchestrates the entire poker tournament from start to finish
 """
 import logging
 import time
+import random
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 import json
@@ -139,7 +140,7 @@ class TournamentRunner:
                                starting_chips=0,  # Will use tournament chip counts
                                small_blind=small_blind, 
                                big_blind=big_blind,
-                               dealer_button_index=table.dealer_button)
+                               dealer_button_index=random.randrange(len(bots)))
                 
                 # Set actual chip counts from tournament
                 for player in player_ids:
