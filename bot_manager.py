@@ -8,6 +8,7 @@ import os
 import signal
 import time
 import traceback
+import threading
 import multiprocessing
 from typing import Dict, List, Optional, Any, Tuple
 from contextlib import contextmanager
@@ -28,6 +29,11 @@ class BotError(Exception):
     pass
 
 
+def timeout_expired():
+    """Send SIGINT after timeout expires"""
+    signal.raise_signal(signal.SIGINT)
+
+
 def timeout_handler(signum, frame):
     """Signal handler for timeout"""
     raise TimeoutException("Bot action timed out")
@@ -36,16 +42,14 @@ def timeout_handler(signum, frame):
 @contextmanager
 def timeout_context(seconds: float):
     """Context manager for handling timeouts"""
-    # Set up the timeout signal
-    old_handler = signal.signal(signal.SIGALRM, timeout_handler)
-    signal.setitimer(signal.ITIMER_REAL, seconds)
-    
+    timeout_timer = threading.Timer(seconds, timeout_expired)
+    old_handler = signal.signal(signal.SIGINT, timeout_handler)
     try:
+        timeout_timer.start()
         yield
+        timeout_timer.cancel()
     finally:
-        # Restore the old signal handler
-        signal.alarm(0)
-        signal.signal(signal.SIGALRM, old_handler)
+        signal.signal(signal.SIGINT, old_handler)
 
 
 class BotWrapper:
