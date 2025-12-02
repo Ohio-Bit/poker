@@ -6,6 +6,7 @@ import collections
 import time
 import sys
 import logging
+import argparse  # Add argparse for CLI support
 from tournament_runner import TournamentRunner, TournamentSettings, TournamentType
 
 def run_many(num_tournaments=1000):
@@ -161,4 +162,12 @@ def run_many(num_tournaments=1000):
         print(f"{bot_name:<30} | {earnings_str:<12} | {points:<8} | {avg_points:<8.2f} | {p_points:<8} | {wins:<8} | {win_rate:>7.1f}% | {dqs:<5}")
 
 if __name__ == "__main__":
-    run_many(1000)
+    parser = argparse.ArgumentParser(description="Run multiple poker tournaments and aggregate results.")
+    parser.add_argument(
+        "--num-tournaments",
+        type=int,
+        default=1000,
+        help="Number of tournaments to run (default: 1000)"
+    )
+    args = parser.parse_args()
+    run_many(args.num_tournaments)
