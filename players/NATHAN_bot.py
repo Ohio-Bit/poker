@@ -23,10 +23,27 @@ class NATHANBot(PokerBotAPI):
 		self.min_confidence_to_raise = 0.75
 		self.min_confidence_to_play = 0.45
 		self.opponent_stats: Dict[str, Dict[str, int]] = {}
+		self.chip_percentage_history: List[float] = []  # Track chip percentage over time
 
 	def get_action(self, game_state: GameState, hole_cards: List[Card], 
 				   legal_actions: List[PlayerAction], min_bet: int, max_bet: int) -> tuple:
 		"""Main decision entry point."""
+		# Calculate chip percentage
+		chip_percentage = self._calculate_chip_percentage(game_state)
+		
+		# Adjust thresholds based on the number of players
+		num_players = len(game_state.player_chips)
+		high_threshold = 30 / (num_players / 2)  # Scale down with more players
+		low_threshold = 10 / (num_players / 2)   # Scale down with more players
+		
+		# Adjust aggression based on chip percentage
+		if chip_percentage > high_threshold:  # High share of chips
+			self.aggression = 0.9  # Increase aggression for high chip share
+		elif chip_percentage < low_threshold:  # Low share of chips
+			self.aggression = 0.3  # Decrease aggression for low chip share
+		else:  # Moderate share of chips
+			self.aggression = 0.6
+
 		# Defensive: if no legal actions, fold
 		if not legal_actions:
 			return PlayerAction.FOLD, 0
@@ -161,7 +178,9 @@ class NATHANBot(PokerBotAPI):
 	def _choose_raise_amount(self, game_state: GameState, min_bet: int, max_bet: int, factor: float = 1.0) -> int:
 		"""Choose a sensible raise amount: factor * pot, clamped to [min_bet, max_bet].
 		The game expects the total bet amount (not additional)."""
-		desired = int(game_state.pot * factor)
+		# Adjust raise factor based on aggression level
+		adjusted_factor = factor * self.aggression
+		desired = int(game_state.pot * adjusted_factor)
 		amount = max(min_bet, desired)
 		amount = min(amount, max_bet)
 		if amount < min_bet:
@@ -195,6 +214,13 @@ class NATHANBot(PokerBotAPI):
 		# otherwise use aggression multiplier
 		return True if self.aggression > 0.6 else False
 
+	def _calculate_chip_percentage(self, game_state: GameState) -> float:
+		"""Calculate the percentage of chips the bot has relative to the total chips in play."""
+		total_chips = sum(game_state.player_chips.values())
+		if total_chips == 0:
+			return 0.0
+		return (game_state.player_chips.get(self.name, 0) / total_chips) * 100
+
 	def hand_complete(self, game_state: GameState, hand_result: Dict[str, Any]):
 		self.hands_played += 1
 		if 'winners' in hand_result and self.name in hand_result['winners']:
@@ -218,6 +244,14 @@ class NATHANBot(PokerBotAPI):
 					stats['won'] += 1
 		except Exception:
 			pass
+
+		# Update chip percentage history
+		chip_percentage = self._calculate_chip_percentage(game_state)
+		self.chip_percentage_history.append(chip_percentage)
+
+	def get_chip_percentage_history(self) -> List[float]:
+		"""Retrieve the history of chip percentages."""
+		return self.chip_percentage_history
 
 	def tournament_start(self, players: List[str], starting_chips: int):
 		super().tournament_start(players, starting_chips)
