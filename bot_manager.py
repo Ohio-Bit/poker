@@ -36,16 +36,21 @@ def timeout_handler(signum, frame):
 @contextmanager
 def timeout_context(seconds: float):
     """Context manager for handling timeouts"""
-    # Set up the timeout signal
-    old_handler = signal.signal(signal.SIGALRM, timeout_handler)
-    signal.setitimer(signal.ITIMER_REAL, seconds)
-    
-    try:
+    # Check if signal.SIGALRM exists (Unix/Linux/Mac)
+    if hasattr(signal, 'SIGALRM'):
+        # Set up the timeout signal
+        old_handler = signal.signal(signal.SIGALRM, timeout_handler)
+        signal.setitimer(signal.ITIMER_REAL, seconds)
+        
+        try:
+            yield
+        finally:
+            # Restore the old signal handler
+            signal.alarm(0)
+            signal.signal(signal.SIGALRM, old_handler)
+    else:
+        # Windows fallback: No timeout enforcement (signal.SIGALRM not supported)
         yield
-    finally:
-        # Restore the old signal handler
-        signal.alarm(0)
-        signal.signal(signal.SIGALRM, old_handler)
 
 
 class BotWrapper:
@@ -119,25 +124,35 @@ class BotWrapper:
             with timeout_context(self.timeout):
                 self.bot.hand_complete(game_state, hand_result)
         except TimeoutException:
-            self.logger.warning(f"Bot {self.name} timed out during hand_complete")
+            self.timeout_count += 1
+            self.logger.warning(f"Bot {self.name} timed out during hand_complete ({self.timeout_count}/{self.max_timeouts})")
         except Exception as e:
-            self.logger.error(f"Bot {self.name} error in hand_complete: {str(e)}")
+            self.error_count += 1
+            self.logger.error(f"Bot {self.name} error in hand_complete ({self.error_count}/{self.max_errors}): {str(e)}")
     
     def tournament_start(self, players: List[str], starting_chips: int):
         """Notify bot of tournament start with error handling"""
         try:
             with timeout_context(self.timeout):
                 self.bot.tournament_start(players, starting_chips)
+        except TimeoutException:
+            self.timeout_count += 1
+            self.logger.warning(f"Bot {self.name} timed out during tournament_start ({self.timeout_count}/{self.max_timeouts})")
         except Exception as e:
-            self.logger.error(f"Bot {self.name} error in tournament_start: {str(e)}")
+            self.error_count += 1
+            self.logger.error(f"Bot {self.name} error in tournament_start ({self.error_count}/{self.max_errors}): {str(e)}")
     
     def tournament_end(self, final_standings: List[Tuple[str, int, int]]):
         """Notify bot of tournament end with error handling"""
         try:
             with timeout_context(self.timeout):
                 self.bot.tournament_end(final_standings)
+        except TimeoutException:
+            self.timeout_count += 1
+            self.logger.warning(f"Bot {self.name} timed out during tournament_end ({self.timeout_count}/{self.max_timeouts})")
         except Exception as e:
-            self.logger.error(f"Bot {self.name} error in tournament_end: {str(e)}")
+            self.error_count += 1
+            self.logger.error(f"Bot {self.name} error in tournament_end ({self.error_count}/{self.max_errors}): {str(e)}")
 
 
 class BotManager:

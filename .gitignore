@@ -181,3 +181,8 @@ cython_debug/
 .cursorindexingignore
 
 logs/
+players/*
+!players/aggressive_bot.py
+!players/conservitive_bot.py
+!players/random_bot.py
+.DS_Store
