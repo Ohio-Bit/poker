@@ -28,6 +28,7 @@ class GameState:
     current_player: str
     round_name: str
     min_bet: int
+    min_raise: int
     big_blind: int
     small_blind: int
 
@@ -50,6 +51,7 @@ class PokerGame:
         self.player_bets: Dict[str, int] = {player: 0 for player in self.player_ids}
         self.active_players: List[str] = self.player_ids.copy()
         self.folded_players: List[str] = []
+        self.total_pot_contributions: Dict[str, int] = {player: 0 for player in self.player_ids}
         
         # Betting state
         self.pot = 0
@@ -126,9 +128,11 @@ class PokerGame:
         self.player_hands = {}
         self.active_players = [p for p in self.player_ids if self.player_chips[p] > 0]
         self.player_bets = {player: 0 for player in self.player_ids}
+        self.total_pot_contributions = {player: 0 for player in self.player_ids}
         self.folded_players = []
         self.pot = 0
         self.current_bet = self.big_blind
+        self.min_raise = self.big_blind
         self.round_name = "preflop"
     
     def deal_hole_cards(self):
@@ -190,11 +194,16 @@ class PokerGame:
             if not player_id:
                 break
             
+            # Skip players who are all-in
+            if self.player_chips[player_id] == 0:
+                self.advance_to_next_player()
+                continue
+            
             bot = self.player_bots[player_id]
             game_state = self.get_game_state()
             player_hand = self.get_player_hand(player_id)
             legal_actions = self.get_legal_actions(game_state, player_id)
-            min_bet = game_state.current_bet + game_state.big_blind
+            min_bet = game_state.min_bet
             max_bet = self.player_chips[player_id] + self.player_bets[player_id]
 
             action, amount = bot.get_action(game_state, player_hand.cards, legal_actions, min_bet, max_bet)
@@ -220,10 +229,19 @@ class PokerGame:
             else: # Should not happen if len(self.active_players) >= 1
                 dealer_active_index = 0 # Default to first active player if no valid dealer is found (shouldn't happen with >=1 active)
 
-        self.current_player_index = (dealer_active_index + 1) % len(self.active_players)
-        if self.round_name != "preflop":
-             self.current_bet = 0
-             for p in self.player_ids:
+        if self.round_name == "preflop":
+            if len(self.active_players) == 2:
+                # Heads-up: Dealer (SB) acts first pre-flop
+                self.current_player_index = dealer_active_index
+            else:
+                # 3+ players: UTG acts first (Left of BB)
+                self.current_player_index = (dealer_active_index + 3) % len(self.active_players)
+            self.min_raise = self.big_blind
+        else:
+            self.current_player_index = (dealer_active_index + 1) % len(self.active_players)
+            self.current_bet = 0
+            self.min_raise = self.big_blind
+            for p in self.player_ids:
                 self.player_bets[p] = 0
         
     def get_current_player(self) -> str:
@@ -243,7 +261,8 @@ class PokerGame:
             active_players=self.active_players.copy(),
             current_player=self.get_current_player(),
             round_name=self.round_name,
-            min_bet=self.big_blind, # Simplified, should be based on previous raise
+            min_bet=self.current_bet + self.min_raise,
+            min_raise=self.min_raise,
             big_blind=self.big_blind,
             small_blind=self.small_blind
         )
@@ -283,7 +302,7 @@ class PokerGame:
         elif action == PlayerAction.CALL:
             return to_call > 0 and player_chips >= to_call
         elif action == PlayerAction.RAISE:
-            min_raise = game_state.current_bet + game_state.big_blind
+            min_raise = game_state.min_bet
             return (amount >= min_raise and 
                     player_chips >= (amount - player_bet) and
                     amount > game_state.current_bet)
@@ -308,6 +327,9 @@ class PokerGame:
             self.folded_players.append(player)
             if player in self.active_players:
                 self.active_players.remove(player)
+                # Decrement index so that the next increment in advance_to_next_player
+                # points to the correct next player (who shifted into this slot)
+                self.current_player_index -= 1
             self.logger.info(f"  {player} folds")
         
         elif action == PlayerAction.CHECK:
@@ -318,6 +340,7 @@ class PokerGame:
             self.player_bets[player] += call_amount
             self.player_chips[player] -= call_amount
             self.pot += call_amount
+            self.total_pot_contributions[player] += call_amount
             self.logger.info(f"  {player} calls {call_amount}")
         
         elif action == PlayerAction.RAISE:
@@ -332,6 +355,11 @@ class PokerGame:
             self.player_bets[player] += raise_amount
             self.player_chips[player] -= raise_amount
             self.pot += raise_amount
+            self.total_pot_contributions[player] += raise_amount
+            
+            actual_raise = self.player_bets[player] - self.current_bet
+            if actual_raise >= self.min_raise:
+                self.min_raise = actual_raise
             
             if action == PlayerAction.ALL_IN:
                 self.logger.info(f"  {player} goes all-in with {raise_amount}")
@@ -350,6 +378,7 @@ class PokerGame:
             self.player_bets[player] += all_in_amount
             self.player_chips[player] = 0
             self.pot += all_in_amount
+            self.total_pot_contributions[player] += all_in_amount
             new_bet = self.player_bets[player]
             if new_bet > self.current_bet:
                 self.current_bet = new_bet
@@ -433,18 +462,78 @@ class PokerGame:
         return winners
     
     def _distribute_pot(self, winners: List[str]):
-        """Distribute the pot among the winners"""
-        if not winners:
+        """Distribute the pot among the winners, handling side pots."""
+        
+        # Contributions for this hand for all players who put money in
+        contributions = self.total_pot_contributions.copy()
+        active_contributors = [p for p, amount in contributions.items() if amount > 0]
+        
+        if not active_contributors:
             return
+
+        # We distribute until pot is empty or contributions are exhausted
+        while self.pot > 0 and sum(contributions.values()) > 0:
+            # Find the smallest non-zero contribution among all contributors
+            # (This defines the size of the current "main" or "side" pot level)
+            min_contribution = min([c for c in contributions.values() if c > 0])
+            
+            current_pot_size = 0
+            eligible_players = []
+            
+            # Collect chips for this pot level from everyone
+            for player in list(contributions.keys()):
+                if contributions[player] > 0:
+                    amount_to_take = min(contributions[player], min_contribution)
+                    current_pot_size += amount_to_take
+                    contributions[player] -= amount_to_take
+                    
+                    # Players who are still active (haven't folded) and contributed 
+                    # to this level are eligible to win this pot
+                    if player in self.active_players:
+                        eligible_players.append(player)
+
+            if not eligible_players:
+                # Should not happen if logic is correct, but handle gracefully
+                # e.g. everyone folded? But determining winners happens after showdown.
+                # If everyone folded, active_players has 1, who is eligible.
+                continue
+
+            # Determine winner(s) for this specific pot from eligible players
+            # We need to re-evaluate winners among ONLY the eligible players
+            
+            if len(eligible_players) == 1:
+                pot_winners = eligible_players
+            else:
+                # Evaluate hands only for eligible players
+                player_hands_to_evaluate = []
+                for player_id in eligible_players:
+                    hole_cards = self.player_hands[player_id].cards
+                    all_cards = hole_cards + self.community_cards
+                    player_hands_to_evaluate.append((player_id, all_cards))
+                
+                pot_winners = HandEvaluator.get_winners(player_hands_to_evaluate)
+            
+            # Distribute this pot level
+            winnings_per_player = current_pot_size // len(pot_winners)
+            remainder = current_pot_size % len(pot_winners)
+            
+            for winner in pot_winners:
+                self.player_chips[winner] += winnings_per_player
+                self.logger.info(f"{winner} wins {winnings_per_player} from side/main pot")
+            
+            # Give remainder to first winner (simplified)
+            if remainder > 0:
+                self.player_chips[pot_winners[0]] += remainder
+
+            self.pot -= current_pot_size
         
-        # For now, simple pot splitting. Side pots are not handled.
-        winnings_per_player = self.pot // len(winners)
-        for winner in winners:
-            self.player_chips[winner] += winnings_per_player
-            self.logger.info(f"{winner} wins {winnings_per_player}")
-        
-        # Clear pot after distribution
-        self.pot = 0
+        # If pot still has chips (rounding errors or logic slips), give to main winners
+        if self.pot > 0:
+             self.logger.warning(f"Pot logic residual: {self.pot}")
+             # Give to original overall winners
+             for winner in winners:
+                 self.player_chips[winner] += self.pot // len(winners)
+             self.pot = 0
 
     def _log_round_summary(self):
         """Logs a summary of the current round."""

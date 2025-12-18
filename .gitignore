@@ -183,6 +183,9 @@ cython_debug/
 logs/
 players/*
 !players/aggressive_bot.py
-!players/conservitive_bot.py
+!players/conservative_bot.py
 !players/random_bot.py
+!players/winner.py
 .DS_Store
+players/winner.py
+repro_side_pot.py

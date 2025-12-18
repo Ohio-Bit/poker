@@ -66,9 +66,7 @@ class ConservativeBot(PokerBotAPI):
             current_pot = game_state.pot
             # Ensure raise amount is at least min_bet and within max_bet
             # Attempt to raise by a third of the pot, but adjust if it's too small or too large
-            # The current_bet + 2 * big_blind is a common minimum raise amount
-            min_raise_amount = game_state.current_bet + game_state.big_blind
-            suggested_raise = max(min_raise_amount, game_state.current_bet + current_pot // 3)
+            suggested_raise = max(min_bet, game_state.current_bet + current_pot // 3)
             raise_amount = min(suggested_raise, max_bet)
             
             # Ensure raise amount is actually greater than current_bet if raising

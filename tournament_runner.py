@@ -233,8 +233,10 @@ class TournamentRunner:
         for i, (player, chips, position) in enumerate(standings):
             if position == 1:
                 print(f"🏆 WINNER: {player} - {chips:,} chips")
-            elif position <= 3:
+            elif position == 2:
                 print(f"🥈 {position}. {player} - {chips:,} chips")
+            elif position == 3:
+                print(f"🥉 {position}. {player} - {chips:,} chips")
             else:
                 print(f"   {position}. {player} - {chips:,} chips")
         

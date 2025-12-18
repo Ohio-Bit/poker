@@ -8,6 +8,7 @@ import os
 import signal
 import time
 import traceback
+import threading
 import multiprocessing
 from typing import Dict, List, Optional, Any, Tuple
 from contextlib import contextmanager
@@ -35,21 +36,23 @@ def timeout_handler(signum, frame):
 
 @contextmanager
 def timeout_context(seconds: float):
-    """Context manager for handling timeouts"""
-    # Check if signal.SIGALRM exists (Unix/Linux/Mac)
-    if hasattr(signal, 'SIGALRM'):
-        # Set up the timeout signal
+    """Context manager for handling timeouts using signal.setitimer (Unix only)"""
+    # Use signal.setitimer/SIGALRM which is much lighter than threading.Timer
+    if hasattr(signal, 'setitimer') and hasattr(signal, 'SIGALRM'):
         old_handler = signal.signal(signal.SIGALRM, timeout_handler)
-        signal.setitimer(signal.ITIMER_REAL, seconds)
-        
         try:
+            # Schedule the alarm
+            signal.setitimer(signal.ITIMER_REAL, seconds)
             yield
         finally:
-            # Restore the old signal handler
-            signal.alarm(0)
+            # Disable the alarm
+            signal.setitimer(signal.ITIMER_REAL, 0)
+            # Restore old handler
             signal.signal(signal.SIGALRM, old_handler)
     else:
-        # Windows fallback: No timeout enforcement (signal.SIGALRM not supported)
+        # Fallback for Windows (no SIGALRM), though less effective/reliable
+        # We can use the threading approach here if needed, but for now just yield
+        # to avoid the massive threading error on supported systems.
         yield
 
 

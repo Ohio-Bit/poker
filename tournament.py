@@ -211,54 +211,98 @@ class PokerTournament:
                 stats.biggest_pot_won = max(stats.biggest_pot_won, winnings)
     
     def should_rebalance_tables(self) -> bool:
-        """Check if tables need rebalancing"""
+        """Check if tables need rebalancing based on stricter criteria."""
+        active_players = self.get_active_players()
         active_tables = [t for t in self.tables.values() if len(t.get_active_players()) > 0]
+        
+        # If all active players can fit on one table, and there's more than one table, consolidate.
+        if len(active_players) <= self.settings.max_players_per_table and len(active_tables) > 1:
+            return True
         
         if len(active_tables) <= 1:
             return False
         
-        # Check for tables that need to be broken
+        table_sizes = [len(t.get_active_players()) for t in active_tables]
+
+        # Trigger if any table is "ready to break" (e.g., < min_players_per_table, which is 2 by default)
         for table in active_tables:
             if table.is_ready_to_break():
                 return True
         
-        # Check for significant imbalance
-        table_sizes = [len(t.get_active_players()) for t in active_tables]
-        if max(table_sizes) - min(table_sizes) > 2:
+        # User's specific rule: If total active players >= 4, no table should have < 4 players.
+        # This check should only trigger if it's actually possible to form tables of 4+.
+        if len(active_players) >= 4:
+            if any(size < 4 for size in table_sizes):
+                # Calculate if it's possible to form tables of 4+
+                # Find the maximum number of tables that could be formed with 4 players each
+                max_tables_at_4 = len(active_players) // 4
+                if max_tables_at_4 >= len(active_tables): # If we can form all tables with 4+ players, rebalance
+                     return True
+
+        # Check for significant imbalance (difference of more than 1 player between tables)
+        if len(table_sizes) > 1 and max(table_sizes) - min(table_sizes) > 1:
             return True
         
         return False
     
     def rebalance_tables(self):
-        """Rebalance players across tables"""
+        """Rebalance players across tables by gathering all active players and re-distributing them."""
+        self.logger.info("Rebalancing tables...")
         active_players = self.get_active_players()
         
-        if len(active_players) <= self.settings.max_players_per_table:
-            # Consolidate to single table
-            self.consolidate_to_final_table(active_players)
+        # Clear all existing tables
+        self.tables.clear()
+        
+        # Re-distribute all active players from scratch
+        random.shuffle(active_players) # Shuffle to randomize seating again
+        
+        # Determine the target number of tables and players per table
+        num_players = len(active_players)
+        
+        if num_players == 0:
             return
+
+        if num_players <= self.settings.max_players_per_table:
+            # All players fit on one table (final table or early game)
+            self.tables[1] = TournamentTable(1, active_players, self.settings)
+            self.logger.info(f"Consolidated to single table with {num_players} players.")
+            return
+
+        # Calculate ideal players per table aiming for >= 4 if possible
+        # This will try to create tables of min_size 4 if total_players >=4
+        min_players_per_table_target = max(self.settings.min_players_per_table, 4 if num_players >= 4 else 0)
+
+        # Calculate optimal number of tables based on max_players_per_table and min_players_per_table_target
+        # Try to make tables as full as possible without exceeding max_players_per_table
+        # And keeping above min_players_per_table_target
         
-        # Remove empty tables
-        self.tables = {tid: table for tid, table in self.tables.items() 
-                      if len(table.get_active_players()) > 0}
+        num_tables = math.ceil(num_players / self.settings.max_players_per_table)
         
-        # Break tables that are too small
-        tables_to_break = []
-        for table_id, table in self.tables.items():
-            if table.is_ready_to_break():
-                tables_to_break.append(table_id)
-        
-        # Move players from broken tables
-        displaced_players = []
-        for table_id in tables_to_break:
-            displaced_players.extend(self.tables[table_id].get_active_players())
-            del self.tables[table_id]
-        
-        # Distribute displaced players
-        remaining_tables = list(self.tables.values())
-        for i, player in enumerate(displaced_players):
-            target_table = remaining_tables[i % len(remaining_tables)]
-            target_table.players.append(player)
+        # Adjust num_tables to avoid having tables smaller than min_players_per_table_target if possible
+        while num_tables > 1 and (num_players / num_tables) < min_players_per_table_target:
+            num_tables -= 1
+        num_tables = max(1, num_tables) # Ensure at least one table
+
+        players_per_table_base = num_players // num_tables
+        remaining_players = num_players % num_tables
+
+        current_player_idx = 0
+        for i in range(num_tables):
+            table_id = i + 1
+            players_on_this_table = players_per_table_base
+            if i < remaining_players:
+                players_on_this_table += 1
+            
+            table_players_subset = active_players[current_player_idx : current_player_idx + players_on_this_table]
+            
+            if len(table_players_subset) < self.settings.min_players_per_table:
+                # This should ideally not happen with the logic above, but as a safeguard.
+                self.logger.warning(f"Attempted to create table with fewer than min_players_per_table: {len(table_players_subset)}")
+                if len(table_players_subset) == 0: continue # Don't create empty tables
+            
+            self.tables[table_id] = TournamentTable(table_id, table_players_subset, self.settings)
+            self.logger.info(f"Table {table_id}: {len(table_players_subset)} players: {', '.join(table_players_subset)}")
+            current_player_idx += players_on_this_table
         
         self.logger.info(f"Tables rebalanced. Active tables: {len(self.tables)}")
     
